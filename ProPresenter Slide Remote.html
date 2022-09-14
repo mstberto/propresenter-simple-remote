@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .playlists-group {
+      float: left;
+      overflow: auto;
+      padding: 1%;
+    }
+
+    .playlists-container {
+      float: left;
+      width: 10%;
+    }
+
+    .playlist-items-container {
+      width: 10%;
+      margin-top: 10px;
+    }
+
+    .grid-container {
+      display: grid;
+      grid-template-columns: auto auto auto auto;
+      padding: 10px;
+      gap: 10px;
+      margin-left: 3%;
+    }
+
+    .slide {
+      background-color: #f1f1f1;
+      box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.3);
+
+    }
+  </style>
+</head>
+
+<body>
+
+  <h3 onClick="window.location.reload();" style="color:darkcyan;cursor: pointer;padding-left: 10px;margin:0">Refresh
+    Presentation</h3>
+  <i>
+    <pre id="status-message"
+      style="color:gray;padding-left: 10px;margin:0">Tap <q>Refresh Presentation</q> To Refresh Slides</pre>
+  </i>
+  <div id="playlists-group" class="playlists-group">
+    <div id="playlists-container" class="playlists-container"></div>
+    <div id="playlist-items-container" class="playlist-items-container"></div>
+  </div>
+  <div id="grid-container" class="grid-container"></div>
+
+</body>
+
+<script>
+  // TODO: live feedback of active slide if Pro7 active slide changes by means other than this web app telling it to.
+  // TODO: live feedback for lose of control if active presentation changes away from controllable presentation
+  // TODO: Consider a nicer method to lock down to desired presentation instead of hard coded name  - Perhaps an electron app as middle-man where operator can select a presentation to make it controllable?)
+  // TODO: make grid/slides more "responsive" (scale up and down the slides as container is resized and/or dynamic # of columns)
+
+  var currentPlaylistUUID;
+  var currentPresentationUUID;
+  var currentSlideIndex = -1;
+  var slideCount;
+
+  var windowUrl = new URL(window.location.href);
+  var baseUrl = 'http://media-imac.lckc.org:35002/v1';
+
+  var slideQuality = windowUrl.searchParams.get("quality");
+
+  if (slideQuality == null) {
+    slideQuality = "600";
+  }
+
+  document.addEventListener("keydown", handleKeyDown) // Allow keyboard control (both space and arrow keys)
+
+  loadPlaylists()
+
+  function loadPlaylists() {
+    var xmlHttp = new XMLHttpRequest()
+    try {
+      xmlHttp.open('GET', baseUrl + '/playlists');
+    } catch (error) {
+      document.querySelector('#status-message').innerText = 'Playlists failed to load: ' + error;
+      return;
+    }
+
+    xmlHttp.onload = function (e) {
+      if (xmlHttp.status == 200) {
+        console.log(xmlHttp.response)
+        var response = JSON.parse(xmlHttp.response);
+
+        var html = '<select id="playlists" name="playlists" style="padding: 5px;" size="' + response.length + '" onchange="loadPlaylist();">';
+        for (let i = 0; i < response.length; i++) {
+          let obj = response[i];
+          html += '<option value="' + obj.id.uuid + '">' + obj.id.name + '</option>';
+        }
+        html += '</select>';
+        document.querySelector('#playlists-container').innerHTML = html
+      }
+    }
+
+    xmlHttp.send();
+  }
+
+  function loadPlaylist() {
+    currentPlaylistUUID = document.querySelector("#playlists").value;
+    console.log('Selected playlist: ' + currentPlaylistUUID);
+
+    if (null == currentPlaylistUUID) {
+      document.querySelector('#status-message').innerText = 'Playlist failed to load.';
+      return;
+    }
+
+    var xmlHttp = new XMLHttpRequest();
+
+    try {
+      xmlHttp.open('GET', baseUrl + '/playlist/' + currentPlaylistUUID);
+    } catch (error) {
+      document.querySelector('#status-message').innerText = 'Failed to load playlist: ' + error;
+      return;
+    }
+
+    xmlHttp.onload = function (e) {
+      if (xmlHttp.status == 200) {
+        console.log(xmlHttp.response)
+        var response = JSON.parse(xmlHttp.response);
+
+        var html = '<select id="presentations" name="presentations" style="padding: 5px;" size="' + response.items.length + '" onchange="loadPresentation();">';
+        var isInOptGroup = false;
+        for (let i = 0; i < response.items.length; i++) {
+          let obj = response.items[i];
+
+          if (obj.type == 'presentation') {
+            html += '<option value="' + obj.id.uuid + '">' + obj.id.name + '</option>';
+          } else if (obj.type == 'header') {
+            if (isInOptGroup) {
+              html += '</optgroup>';
+            }
+
+            isInOptGroup = true;
+            html += '<optgroup label="' + obj.id.name + '">';
+          }
+        }
+
+        if (isInOptGroup) {
+          html += '</optgroup>';
+          isInOptGroup = false;
+        }
+
+        html += '</select>';
+        document.querySelector('#playlist-items-container').innerHTML = html
+      }
+    }
+
+    xmlHttp.send();
+  }
+
+  function loadPresentation() {
+    currentPresentationUUID = document.querySelector("#presentations").value;
+    console.log('Selected presentation: ' + currentPresentationUUID);
+
+    if (null == currentPresentationUUID) {
+      document.querySelector('#status-message').innerText = 'Presentation failed to load.';
+      return;
+    }
+
+    var xhr = new XMLHttpRequest();
+
+    try {
+      xhr.open('GET', baseUrl + '/presentation/' + currentPresentationUUID);
+    } catch (error) {
+      document.querySelector('#status-message').innerText = 'Failed to load presentation: ' + error;
+      return;
+    }
+
+    xhr.onload = function (e) {
+      if (xhr.status == 200) {
+        try {
+          document.querySelector('#status-message').innerText = 'Controllable - Tap any slide to Trigger. (Spacebar and Arrow keys also work). Tap "Refresh Presentation" To Refresh Slides'
+          slideCount = 0;
+          getSlide(0); // start recursively getting all slide thumbs...
+        } catch (error) {
+          document.querySelector('#status-message').innerText = 'Error: ' + error;
+        }
+      }
+    };
+
+    xhr.onerror = function (e) {
+      document.querySelector('#status-message').innerText = 'Could not connect to ProPresenter';
+    }
+
+    xhr.send();
+  }
+
+  function getSlide(slideIndex) {
+    var xhr = new XMLHttpRequest();
+
+    try {
+      xhr.open('GET', baseUrl + '/v1/presentation/' + currentPresentationUUID + '/thumbnail/' + slideIndex + '?quality=' + slideQuality, true);
+    } catch (error) {
+      document.querySelector('#status-message').innerText = ('Could not retrieve slide:' + error);
+      return;
+    }
+
+    xhr.responseType = 'blob';
+
+    xhr.onload = () => {
+      if (xhr.status == 200) {
+        var containerWidth = document.getElementById('grid-container').clientWidth;
+
+        // Add new slide to grid...
+        slideElement = document.createElement('img');
+        slideElement.slideIndex = slideIndex;
+        slideElement.setAttribute('class', 'slide');
+        slideElement.setAttribute('src', window.URL.createObjectURL(xhr.response)); // create a temporary blob object to hold the image data and be the src for the image element
+        //slideElement.style["width"] = String(parseInt(slideQuality)/2) + 'px';
+        slideElement.style["width"] = String(parseInt((containerWidth - 50) / 4)) + 'px';
+        slideElement.style["outline-color"] = "orange";
+        slideElement.style["outline-width"] = "7px";
+
+        // Show current active slide with highlighted border
+        if (slideElement.slideIndex == currentSlideIndex) {
+          slideElement.style["outline-style"] = "solid";
+        }
+
+        slideElement.addEventListener("click", handleClick); // Add click handler to all slides (logic to check if clicking a slide show allow control is done in the triggerSlide function)
+        document.querySelector('.grid-container').appendChild(slideElement);
+        slideCount++; // Keep track of how many slides we have.
+
+        // Keep calling this getSlide function recursively for the next slide thumbnail until we fail with a 404 - need to do it this way since there is no way to astertain # of slides when a presentation has a custom arrangement active.
+        getSlide(slideIndex + 1);
+      }
+    };
+
+    xhr.send();
+  }
+
+  function handleKeyDown(event) {
+    if (event.key == " " || event.keyCode == 39) {
+      event.preventDefault();
+      if (currentSlideIndex < slideCount - 1) { // Do not try to trigger past last slide
+        triggerSlide(currentSlideIndex + 1);
+      }
+    }
+    if (event.keyCode == 37) {
+      event.preventDefault();
+      if (currentSlideIndex > 0) { // do not try to trigger before first slide
+        triggerSlide(currentSlideIndex - 1);
+      }
+    }
+  }
+
+  function handleClick(event) {
+    triggerSlide(event.currentTarget.slideIndex);
+  }
+
+  function triggerSlide(slideIndex) {
+    var xmlHttp = new XMLHttpRequest();
+
+    console.log("triggerSlide: " + slideIndex);
+
+    try {
+      document.querySelector('#status-message').innerText = 'Controllable - Tap any slide to Trigger. (Spacebar and Arrow keys also work). Tap "Refresh Presentation" To Refresh Slides'
+      xmlHttp.open('GET', baseUrl + '/v1/presentation/' + currentPresentationUUID + '/trigger/' + slideIndex);
+
+      xmlHttp.onload = function (e) {
+        // Remove highlighted border from previously selected/triggered slide...
+        if (currentSlideIndex >= 0) {
+          document.querySelectorAll(".slide")[currentSlideIndex].style["outline-style"] = null;
+
+          // Update record of which slide is highlighted/triggered.
+          currentSlideIndex = slideIndex;
+
+          // Highlight border to newly triggered slide:
+          document.querySelectorAll(".slide")[currentSlideIndex].style["outline-style"] = 'solid';
+        }
+      }
+
+      xmlHttp.send();
+    } catch (error) {
+      document.querySelector('#status-message').innerText = ('error:' + error);
+    }
+  }
+</script>
+
+</html>
